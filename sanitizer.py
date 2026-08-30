@@ -100,12 +100,40 @@ class EnterpriseSanitizer:
         prompt_vec = text_to_vector(prompt)
         for idx, sem_vec in enumerate(self.semantic_vectors):
             sim = cosine_similarity(prompt_vec, sem_vec)
-            if sim > 0.65:
+            if sim >= 0.55: # Cosine similarity threshold
                 latency_ms = (time.perf_counter() - t0) * 1000.0
-                return False, f"Semantic Injection Blocked [Similarity: {sim:.2f}]", latency_ms, {"layer": "Layer 3 Semantic ML Classifier"}
+                return False, f"Semantic Injection Blocked [Vector #{idx+1} Similarity: {sim:.2f}]", latency_ms, {"layer": "Layer 3 Semantic ML Vector"}
 
         latency_ms = (time.perf_counter() - t0) * 1000.0
-        return True, "SAFE_CLEAN", latency_ms, {"layer": "Verified Safe"}
+        return True, "CLEAN", latency_ms, {"layer": "Passed All 3 Layers"}
+
+    def inspect_output_leak(self, response_text: str) -> Tuple[bool, str]:
+        """
+        Layer 5 System Prompt & Secret Leak Shield:
+        Prevents LLM output from leaking system instructions or API keys.
+        """
+        secret_patterns = [
+            re.compile(r"sk-[a-zA-Z0-9]{32,}", re.IGNORECASE),
+            re.compile(r"AIzaSy[a-zA-Z0-9_\-]{33}", re.IGNORECASE),
+            re.compile(r"ghp_[a-zA-Z0-9]{36}", re.IGNORECASE),
+            re.compile(r"SYSTEM\s+PROMPT\s*:\s*", re.IGNORECASE)
+        ]
+        for pattern in secret_patterns:
+            if pattern.search(response_text):
+                return False, f"Output Redacted: System Secret / Key Leak Attempted [Pattern: {pattern.pattern}]"
+        return True, "CLEAN_OUTPUT"
+
+    def inspect_mcp_tool_call(self, tool_name: str, tool_args: Dict[str, Any]) -> Tuple[bool, str]:
+        """
+        Layer 4 MCP Tool Call Poisoning Guard:
+        Validates tool execution arguments for indirect injection or command execution sinks.
+        """
+        raw_args_str = json.dumps(tool_args)
+        is_safe, reason, _, _ = self.inspect_prompt(raw_args_str)
+        if not is_safe:
+            return False, f"MCP Tool Poisoning Blocked in '{tool_name}': {reason}"
+        return True, "CLEAN_TOOL_CALL"
+
 
 if __name__ == "__main__":
     sanitizer = EnterpriseSanitizer()
